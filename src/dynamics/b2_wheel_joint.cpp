@@ -64,18 +64,69 @@ b2WheelJoint::b2WheelJoint(const b2WheelJointDef* def)
 	m_springMass = 0.0f;
 	m_springImpulse = 0.0f;
 
+	m_frequencyHz = def->frequencyHz;
+	m_dampingRatio = def->dampingRatio;
+	m_stiffness = 0.0f;
+	m_damping = 0.0f;
+
+	m_limitImpulse = 0.0f;
+	m_lowerTranslation = def->lowerTranslation;
+	m_upperTranslation = def->upperTranslation;
+	m_enableLimit = def->enableLimit;
+
 	m_maxMotorTorque = def->maxMotorTorque;
 	m_motorSpeed = def->motorSpeed;
 	m_enableMotor = def->enableMotor;
-
-	m_frequencyHz = def->frequencyHz;
-	m_dampingRatio = def->dampingRatio;
 
 	m_bias = 0.0f;
 	m_gamma = 0.0f;
 
 	m_ax.SetZero();
 	m_ay.SetZero();
+
+	// Initialize spring stiffness and damping based on desired frequency and damping ratio.
+	// This uses the effective mass seen by the spring using the current body transforms.
+	if (def->frequencyHz > 0.0f)
+	{
+		b2Vec2 localCenterA = m_bodyA->m_sweep.localCenter;
+		b2Vec2 localCenterB = m_bodyB->m_sweep.localCenter;
+
+		float mA = m_bodyA->m_invMass, mB = m_bodyB->m_invMass;
+		float iA = m_bodyA->m_invI, iB = m_bodyB->m_invI;
+
+		b2Vec2 cA = m_bodyA->m_sweep.c;
+		float aA = m_bodyA->m_sweep.a;
+
+		b2Vec2 cB = m_bodyB->m_sweep.c;
+		float aB = m_bodyB->m_sweep.a;
+
+		b2Rot qA(aA), qB(aB);
+
+		b2Vec2 rA = b2Mul(qA, m_localAnchorA - localCenterA);
+		b2Vec2 rB = b2Mul(qB, m_localAnchorB - localCenterB);
+		b2Vec2 d = cB + rB - cA - rA;
+
+		b2Vec2 ax = b2Mul(qA, m_localXAxisA);
+		float sAx = b2Cross(d + rA, m_ax);
+		float sBx = b2Cross(rB, m_ax);
+
+		// Effective mass seen by spring
+		float invMass = mA + mB + iA * sAx * sAx + iB * sBx * sBx;
+
+		if (invMass > 0.0f)
+		{
+			float springMass = 1.0f / invMass;
+
+			// Frequency
+			float omega = 2.0f * b2_pi * def->frequencyHz;
+
+			// Damping coefficient
+			m_damping = 2.0f * springMass * def->dampingRatio * omega;
+
+			// Spring stiffness
+			m_stiffness = springMass * omega * omega;
+		}
+	}
 }
 
 void b2WheelJoint::InitVelocityConstraints(const b2SolverData& data)
@@ -127,7 +178,7 @@ void b2WheelJoint::InitVelocityConstraints(const b2SolverData& data)
 	m_springMass = 0.0f;
 	m_bias = 0.0f;
 	m_gamma = 0.0f;
-	if (m_frequencyHz > 0.0f)
+	if (m_stiffness > 0.0f)
 	{
 		m_ax = b2Mul(qA, m_localXAxisA);
 		m_sAx = b2Cross(d + rA, m_ax);
@@ -141,24 +192,15 @@ void b2WheelJoint::InitVelocityConstraints(const b2SolverData& data)
 
 			float C = b2Dot(d, m_ax);
 
-			// Frequency
-			float omega = 2.0f * b2_pi * m_frequencyHz;
-
-			// Damping coefficient
-			float damp = 2.0f * m_springMass * m_dampingRatio * omega;
-
-			// Spring stiffness
-			float k = m_springMass * omega * omega;
-
 			// magic formulas
 			float h = data.step.dt;
-			m_gamma = h * (damp + h * k);
+			m_gamma = h * (m_damping + h * m_stiffness);
 			if (m_gamma > 0.0f)
 			{
 				m_gamma = 1.0f / m_gamma;
 			}
 
-			m_bias = C * h * k * m_gamma;
+			m_bias = C * h * m_stiffness * m_gamma;
 
 			m_springMass = invMass + m_gamma;
 			if (m_springMass > 0.0f)
@@ -397,6 +439,45 @@ float b2WheelJoint::GetJointAngularSpeed() const
 	float wA = m_bodyA->m_angularVelocity;
 	float wB = m_bodyB->m_angularVelocity;
 	return wB - wA;
+}
+
+bool b2WheelJoint::IsLimitEnabled() const
+{
+	return m_enableLimit;
+}
+
+void b2WheelJoint::EnableLimit(bool flag)
+{
+	if (flag != m_enableLimit)
+	{
+		m_bodyA->SetAwake(true);
+		m_bodyB->SetAwake(true);
+		m_enableLimit = flag;
+		m_limitImpulse = 0.0f;
+	}
+}
+
+float b2WheelJoint::GetLowerLimit() const
+{
+	return m_lowerTranslation;
+}
+
+float b2WheelJoint::GetUpperLimit() const
+{
+	return m_upperTranslation;
+}
+
+void b2WheelJoint::SetLimits(float lower, float upper)
+{
+	b2Assert(lower <= upper);
+	if (lower != m_lowerTranslation || upper != m_upperTranslation)
+	{
+		m_bodyA->SetAwake(true);
+		m_bodyB->SetAwake(true);
+		m_lowerTranslation = lower;
+		m_upperTranslation = upper;
+		m_limitImpulse = 0.0f;
+	}
 }
 
 bool b2WheelJoint::IsMotorEnabled() const

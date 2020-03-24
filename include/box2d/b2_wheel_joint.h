@@ -45,8 +45,8 @@ struct b2WheelJointDef : public b2JointDef
 		enableMotor = false;
 		maxMotorTorque = 0.0f;
 		motorSpeed = 0.0f;
-		frequencyHz = 2.0f;
-		dampingRatio = 0.7f;
+		stiffness = 0.0f;
+		damping = 0.0f;
 	}
 
 	/// Initialize the bodies, anchors, axis, and reference angle using the world
@@ -80,11 +80,11 @@ struct b2WheelJointDef : public b2JointDef
 	/// The desired motor speed in radians per second.
 	float motorSpeed;
 
-	/// Suspension frequency, zero indicates no suspension
-	float frequencyHz;
+	/// Suspension stiffness. Typically in units N/m.
+	float stiffness;
 
-	/// Suspension damping ratio, one indicates critical damping
-	float dampingRatio;
+	/// Suspension damping. Typically in units of N*s/m.
+	float damping;
 };
 
 /// A wheel joint. This joint provides two degrees of freedom: translation
@@ -155,6 +155,14 @@ public:
 	/// Get the current motor torque given the inverse time step, usually in N-m.
 	float GetMotorTorque(float inv_dt) const;
 
+	/// Access spring stiffness
+	void SetStiffness(float stiffness);
+	float GetStiffness() const;
+
+	/// Access damping
+	void SetDamping(float damping);
+	float GetDamping() const;
+
 	/// Dump to b2Log
 	void Dump() override;
 
@@ -176,7 +184,9 @@ protected:
 	float m_motorImpulse;
 	float m_springImpulse;
 
-	float m_limitImpulse;
+	float m_lowerImpulse;
+	float m_upperImpulse;
+	float m_translation;
 	float m_lowerTranslation;
 	float m_upperTranslation;
 
@@ -185,9 +195,6 @@ protected:
 
 	bool m_enableLimit;
 	bool m_enableMotor;
-
-	float m_frequencyHz;
-	float m_dampingRatio;
 
 	float m_stiffness;
 	float m_damping;
@@ -208,6 +215,7 @@ protected:
 
 	float m_mass;
 	float m_motorMass;
+	float m_axialMass;
 	float m_springMass;
 
 	float m_bias;

@@ -49,6 +49,15 @@
 // Cdot = -dot(ax1, v1) - dot(cross(d + r1, ax1), w1) + dot(ax1, v2) + dot(cross(r2, ax1), v2)
 // J = [-ax1 -cross(d+r1,ax1) ax1 cross(r2,ax1)]
 
+// Predictive limit is applied even when the limit is not active.
+// Prevents a constraint speed that can lead to a constraint error in one time step.
+// Want C2 = C1 + h * Cdot >= 0
+// Or:
+// Cdot + C1/h >= 0
+// I do not apply a negative constraint error because that is handled in position correction.
+// So:
+// Cdot + max(C1, 0)/h >= 0
+
 // Block Solver
 // We develop a block solver that includes the angular and linear constraints. This makes the limit stiffer.
 //
@@ -95,7 +104,6 @@ b2PrismaticJoint::b2PrismaticJoint(const b2PrismaticJointDef* def)
 	m_motorSpeed = def->motorSpeed;
 	m_enableLimit = def->enableLimit;
 	m_enableMotor = def->enableMotor;
-	m_limitState = e_inactiveLimit;
 
 	m_axis.SetZero();
 	m_perp.SetZero();
@@ -165,30 +173,12 @@ void b2PrismaticJoint::InitVelocityConstraints(const b2SolverData& data)
 		m_K.ey.Set(k12, k22);
 	}
 
-	// Compute motor and limit terms.
 	if (m_enableLimit)
 	{
 		m_translation = b2Dot(m_axis, d);
-		if (b2Abs(m_upperTranslation - m_lowerTranslation) < 2.0f * b2_linearSlop)
-		{
-			m_limitState = e_equalLimits;
-		}
-		else if (m_translation <= m_lowerTranslation)
-		{
-			m_limitState = e_atLowerLimit;
-		}
-		else if (m_translation >= m_upperTranslation)
-		{
-			m_limitState = e_atUpperLimit;
-		}
-		else
-		{
-			m_limitState = e_inactiveLimit;
-		}
 	}
 	else
 	{
-		m_limitState = e_inactiveLimit;
 		m_lowerImpulse = 0.0f;
 		m_upperImpulse = 0.0f;
 	}
@@ -206,7 +196,7 @@ void b2PrismaticJoint::InitVelocityConstraints(const b2SolverData& data)
 		m_lowerImpulse *= data.step.dtRatio;
 		m_upperImpulse *= data.step.dtRatio;
 
-		float axialImpulse = m_motorImpulse + m_lowerImpulse + m_upperImpulse;
+		float axialImpulse = m_motorImpulse + m_lowerImpulse - m_upperImpulse;
 		b2Vec2 P = m_impulse.x * m_perp + axialImpulse * m_axis;
 		float LA = m_impulse.x * m_s1 + m_impulse.y + axialImpulse * m_a1;
 		float LB = m_impulse.x * m_s2 + m_impulse.y + axialImpulse * m_a2;
@@ -221,6 +211,8 @@ void b2PrismaticJoint::InitVelocityConstraints(const b2SolverData& data)
 	{
 		m_impulse.SetZero();
 		m_motorImpulse = 0.0f;
+		m_lowerImpulse = 0.0f;
+		m_upperImpulse = 0.0f;
 	}
 
 	data.velocities[m_indexA].v = vA;
@@ -240,7 +232,7 @@ void b2PrismaticJoint::SolveVelocityConstraints(const b2SolverData& data)
 	float iA = m_invIA, iB = m_invIB;
 
 	// Solve linear motor constraint
-	if (m_enableMotor && m_limitState != e_equalLimits)
+	if (m_enableMotor)
 	{
 		float Cdot = b2Dot(m_axis, vB - vA) + m_a2 * wB - m_a1 * wA;
 		float impulse = m_axialMass * (m_motorSpeed - Cdot);
@@ -263,9 +255,9 @@ void b2PrismaticJoint::SolveVelocityConstraints(const b2SolverData& data)
 	{
 		// Lower limit
 		{
+			float C = m_translation - m_lowerTranslation;
 			float Cdot = b2Dot(m_axis, vB - vA) + m_a2 * wB - m_a1 * wA;
-			float separation = b2Max(m_translation - m_lowerTranslation, 0.0f);
-			float impulse = -m_axialMass * (Cdot + separation * data.step.inv_dt);
+			float impulse = -m_axialMass * (Cdot + b2Max(C, 0.0f) * data.step.inv_dt);
 			float oldImpulse = m_lowerImpulse;
 			m_lowerImpulse = b2Max(m_lowerImpulse + impulse, 0.0f);
 			impulse = m_lowerImpulse - oldImpulse;
@@ -281,22 +273,24 @@ void b2PrismaticJoint::SolveVelocityConstraints(const b2SolverData& data)
 		}
 
 		// Upper limit
+		// Note: signs are flipped to keep C positive when the constraint is satisfied.
+		// This also keeps the impulse positive when the limit is active.
 		{
-			float Cdot = b2Dot(m_axis, vB - vA) + m_a2 * wB - m_a1 * wA;
-			float separation = b2Max(m_upperTranslation - m_translation, 0.0f);
-			float impulse = -m_axialMass * (Cdot - separation * data.step.inv_dt);
+			float C = m_upperTranslation - m_translation;
+			float Cdot = b2Dot(m_axis, vA - vB) + m_a1 * wA - m_a2 * wB;
+			float impulse = -m_axialMass * (Cdot + b2Max(C, 0.0f) * data.step.inv_dt);
 			float oldImpulse = m_upperImpulse;
-			m_upperImpulse = b2Min(m_upperImpulse + impulse, 0.0f);
+			m_upperImpulse = b2Max(m_upperImpulse + impulse, 0.0f);
 			impulse = m_upperImpulse - oldImpulse;
 
 			b2Vec2 P = impulse * m_axis;
 			float LA = impulse * m_a1;
 			float LB = impulse * m_a2;
 
-			vA -= mA * P;
-			wA -= iA * LA;
-			vB += mB * P;
-			wB += iB * LB;
+			vA += mA * P;
+			wA += iA * LA;
+			vB -= mB * P;
+			wB -= iB * LB;
 		}
 	}
 
@@ -589,6 +583,8 @@ float b2PrismaticJoint::GetMotorForce(float inv_dt) const
 
 void b2PrismaticJoint::Dump()
 {
+	// FLT_DECIMAL_DIG == 9
+
 	int32 indexA = m_bodyA->m_islandIndex;
 	int32 indexB = m_bodyB->m_islandIndex;
 
@@ -596,15 +592,15 @@ void b2PrismaticJoint::Dump()
 	b2Log("  jd.bodyA = bodies[%d];\n", indexA);
 	b2Log("  jd.bodyB = bodies[%d];\n", indexB);
 	b2Log("  jd.collideConnected = bool(%d);\n", m_collideConnected);
-	b2Log("  jd.localAnchorA.Set(%.15lef, %.15lef);\n", m_localAnchorA.x, m_localAnchorA.y);
-	b2Log("  jd.localAnchorB.Set(%.15lef, %.15lef);\n", m_localAnchorB.x, m_localAnchorB.y);
-	b2Log("  jd.localAxisA.Set(%.15lef, %.15lef);\n", m_localXAxisA.x, m_localXAxisA.y);
-	b2Log("  jd.referenceAngle = %.15lef;\n", m_referenceAngle);
+	b2Log("  jd.localAnchorA.Set(%.9g, %.9g);\n", m_localAnchorA.x, m_localAnchorA.y);
+	b2Log("  jd.localAnchorB.Set(%.9g, %.9g);\n", m_localAnchorB.x, m_localAnchorB.y);
+	b2Log("  jd.localAxisA.Set(%.9g, %.9g);\n", m_localXAxisA.x, m_localXAxisA.y);
+	b2Log("  jd.referenceAngle = %.9g;\n", m_referenceAngle);
 	b2Log("  jd.enableLimit = bool(%d);\n", m_enableLimit);
-	b2Log("  jd.lowerTranslation = %.15lef;\n", m_lowerTranslation);
-	b2Log("  jd.upperTranslation = %.15lef;\n", m_upperTranslation);
+	b2Log("  jd.lowerTranslation = %.9g;\n", m_lowerTranslation);
+	b2Log("  jd.upperTranslation = %.9g;\n", m_upperTranslation);
 	b2Log("  jd.enableMotor = bool(%d);\n", m_enableMotor);
-	b2Log("  jd.motorSpeed = %.15lef;\n", m_motorSpeed);
-	b2Log("  jd.maxMotorForce = %.15lef;\n", m_maxMotorForce);
+	b2Log("  jd.motorSpeed = %.9g;\n", m_motorSpeed);
+	b2Log("  jd.maxMotorForce = %.9g;\n", m_maxMotorForce);
 	b2Log("  joints[%d] = m_world->CreateJoint(&jd);\n", m_index);
 }

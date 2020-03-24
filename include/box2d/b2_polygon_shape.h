@@ -62,7 +62,7 @@ public:
 	bool TestPoint(const b2Transform& transform, const b2Vec2& p) const override;
 
 	/// Implement b2Shape.
-	/// @note because the circle is solid, rays that start inside do not hit because the normal is
+	/// @note because the polygon is solid, rays that start inside do not hit because the normal is
 	/// not defined.
 	bool RayCast(b2RayCastOutput* output, const b2RayCastInput& input,
 					const b2Transform& transform, int32 childIndex) const override;

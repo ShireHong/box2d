@@ -175,7 +175,6 @@ protected:
 	float m_motorSpeed;
 	bool m_enableLimit;
 	bool m_enableMotor;
-	b2LimitState m_limitState;
 
 	// Solver temp
 	int32 m_indexA;

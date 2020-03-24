@@ -173,6 +173,8 @@ void b2Rope::Create(const b2RopeDef& def)
 			continue;
 		}
 
+		// a1 = h2 / (h1 + h2)
+		// a2 = h1 / (h1 + h2)
 		c.alpha1 = b2Dot(e2, r) / rr;
 		c.alpha2 = b2Dot(e1, r) / rr;
 	}
